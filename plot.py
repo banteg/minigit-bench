@@ -1,4 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "matplotlib",
+#   "numpy",
+#   "pandas",
+# ]
+# ///
 """
 Generate box-and-dot plots for the coding AI language benchmark.
 
