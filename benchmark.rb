@@ -15,6 +15,20 @@ LOGS_DIR    = File.join(BASE_DIR, 'logs')
 
 GO_DIR = File.join(Dir.home, '.local', 'go')
 NPM_PREFIX = File.join(Dir.home, '.local', 'npm')
+CODEX_CONFIG_PATH = File.join(Dir.home, '.codex', 'config.toml')
+
+CODEX_PRICING = {
+  'standard' => {
+    input_per_million: 2.50,
+    cached_input_per_million: 0.25,
+    output_per_million: 15.00,
+  },
+  'fast' => {
+    input_per_million: 5.00,
+    cached_input_per_million: 0.50,
+    output_per_million: 30.00,
+  },
+}.freeze
 
 LANGUAGES = {
   'rust'        => { exts: %w[rs],     version_cmd: 'rustc --version' },
@@ -127,6 +141,26 @@ def prompt_language_name(lang)
   LANGUAGES[lang][:prompt_name] || lang.capitalize
 end
 
+def codex_service_tier
+  return @codex_service_tier if defined?(@codex_service_tier)
+
+  tier = 'standard'
+  if File.exist?(CODEX_CONFIG_PATH)
+    config = File.read(CODEX_CONFIG_PATH, encoding: 'UTF-8')
+    tier = Regexp.last_match(1) if config =~ /^\s*service_tier\s*=\s*"([^"]+)"/
+  end
+
+  @codex_service_tier = CODEX_PRICING.key?(tier) ? tier : 'standard'
+end
+
+def codex_cost_usd(input_tokens:, cache_read_tokens:, output_tokens:, service_tier:)
+  rates = CODEX_PRICING.fetch(service_tier)
+
+  ((input_tokens * rates[:input_per_million]) +
+   (cache_read_tokens * rates[:cached_input_per_million]) +
+   (output_tokens * rates[:output_per_million])) / 1_000_000.0
+end
+
 def count_loc(dir, lang)
   config = LANGUAGES[lang]
   exts = config[:exts]
@@ -153,7 +187,7 @@ def count_loc(dir, lang)
   end
 end
 
-def parse_codex_output(raw_output)
+def parse_codex_output(raw_output, service_tier:)
   raw_output = raw_output.dup.force_encoding('UTF-8')
   events = raw_output.lines.filter_map do |line|
     stripped = line.strip
@@ -165,12 +199,21 @@ def parse_codex_output(raw_output)
   turn_events = events.select { |e| e.is_a?(Hash) && e['type'] == 'turn.completed' }
   return nil if turn_events.empty?
 
+  input_tokens = turn_events.sum { |e| e.dig('usage', 'input_tokens') || 0 }
+  output_tokens = turn_events.sum { |e| e.dig('usage', 'output_tokens') || 0 }
+  cache_read_tokens = turn_events.sum { |e| e.dig('usage', 'cached_input_tokens') || 0 }
+
   {
-    input_tokens: turn_events.sum { |e| e.dig('usage', 'input_tokens') || 0 },
-    output_tokens: turn_events.sum { |e| e.dig('usage', 'output_tokens') || 0 },
+    input_tokens: input_tokens,
+    output_tokens: output_tokens,
     cache_creation_tokens: 0,
-    cache_read_tokens: turn_events.sum { |e| e.dig('usage', 'cached_input_tokens') || 0 },
-    cost_usd: 0.0,
+    cache_read_tokens: cache_read_tokens,
+    cost_usd: codex_cost_usd(
+      input_tokens: input_tokens,
+      cache_read_tokens: cache_read_tokens,
+      output_tokens: output_tokens,
+      service_tier: service_tier
+    ),
     num_turns: turn_events.length,
     duration_ms: 0,
   }
@@ -183,6 +226,7 @@ def run_codex(prompt, dir:, log_path: nil)
   env_prefix = "export PATH=#{extra_path}:$PATH && "
   cmd = "#{env_prefix}codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox " \
         "-C #{Shellwords.escape(dir)} #{Shellwords.escape(prompt)}"
+  service_tier = codex_service_tier
 
   puts "  Running Codex..."
   start_time = Time.now
@@ -200,7 +244,7 @@ def run_codex(prompt, dir:, log_path: nil)
     stderr: result[:stderr],
     success: result[:success],
     elapsed_seconds: elapsed.round(1),
-    codex_data: parse_codex_output(result[:stdout]),
+    codex_data: parse_codex_output(result[:stdout], service_tier: service_tier),
   }
 end
 
@@ -234,6 +278,7 @@ codex_version_result = run_cmd('codex --version 2>/dev/null || echo unknown')
 codex_version = codex_version_result[:stdout].strip
 
 puts "Codex Version: #{codex_version}"
+puts "Codex Service Tier: #{codex_service_tier}"
 puts "Languages: #{languages_to_run.join(', ')}"
 puts "Trials: #{selected_start}..#{selected_start + selected_trials - 1} (#{selected_trials} trials)"
 puts "Dry run: #{dry_run}"
@@ -374,6 +419,7 @@ meta = {
   date: Time.now.strftime('%Y-%m-%d %H:%M:%S'),
   agent_name: 'Codex Exec',
   agent_version: codex_version,
+  service_tier: codex_service_tier,
   trials: selected_trials,
   versions: versions,
 }
