@@ -24,7 +24,7 @@ These checked-in results were run with `gpt-5.4` at `medium` reasoning effort. T
 - Every language passed every test in every trial. For Codex, this benchmark mostly measures latency and token budget, not recovery from failure.
 - Static typing was not a universal tax. `python/mypy` was basically tied with plain Python on wall-clock time, while `ruby/steep` was dramatically slower and more expensive than plain Ruby.
 - `zig cc` did not improve the C results over GCC here.
-- Gleam passed, but it was an extreme outlier in time, cost, and token volume. Its LOC figures are also polluted by build artifacts, so line-count comparisons for Gleam should be ignored.
+- Gleam passed, but it was still an extreme outlier in time, cost, and token volume even after fixing its LOC accounting to exclude generated/template files.
 
 ## Setup
 
@@ -98,7 +98,7 @@ The phase split is interesting:
 
 ### 1. Reliability stopped being the story
 
-All `75/75` language-trials passed both phases, and every phase completed in a single agent turn. For this Codex run, the benchmark is mostly about speed and token efficiency, not about whether the agent can eventually recover.
+All `75/75` language-trials passed both phases. For this Codex run, the benchmark is mostly about speed and token efficiency, not about whether the agent can eventually recover.
 
 ### 2. Ruby's win is not just speed, but consistency
 
@@ -139,7 +139,7 @@ So this benchmark mostly rewards languages that keep Codex's working context com
 
 ### 6. I would not over-index on LOC
 
-Once Gleam is excluded, time-vs-LOC is much weaker than time-vs-cost. More importantly, the current LOC counter is not clean for Gleam: it can pick up generated or vendored `.gleam` files under `build/`, which blows up the reported line counts. The time and cost charts are much more trustworthy than the LOC plots right now.
+Time-vs-LOC is much weaker than time-vs-cost in this dataset. We also had to patch the LOC counter to exclude generated/template Gleam files, which is a reminder that line counts are easier to distort than time or token usage. The time and cost charts are still the strongest signal here.
 
 ## Reproducing
 

@@ -171,7 +171,7 @@ def load_meta(path):
 # ── Plotting helper ───────────────────────────────────────────────────────
 
 def _compute_positions(languages):
-    """Compute x positions with gaps between groups."""
+    """Compute category positions with gaps between groups."""
     # Build a set for quick lookup of group boundaries
     group_starts = set()
     pos = 0
@@ -191,8 +191,8 @@ def _compute_positions(languages):
     return positions
 
 
-def _auto_ylim(all_values):
-    """Return a y-axis upper limit that clips extreme outliers, or None."""
+def _auto_limit(all_values):
+    """Return an axis upper limit that clips extreme outliers, or None."""
     if len(all_values) == 0:
         return None
     q75 = np.percentile(all_values, 75)
@@ -206,8 +206,14 @@ def _auto_ylim(all_values):
     return None
 
 
-def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
-    """Draw a box plot with overlaid dot (strip) plot.
+def category_figure_size(df):
+    """Return a readable figure size for many horizontal categories."""
+    lang_count = df["language"].nunique()
+    return (11, max(8, 0.42 * lang_count + 1.5))
+
+
+def boxdot(ax, df, value_col, *, value_label, title, clip=True):
+    """Draw a horizontal box plot with overlaid dot (strip) plot.
 
     clip: True for auto IQR clipping, False for no clipping,
           or a number for a fixed upper limit.
@@ -222,14 +228,14 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
     labels = [LANG_LABELS.get(lang, lang) for lang in languages]
     positions = _compute_positions(languages)
 
-    # Determine y-axis clipping
+    # Determine x-axis clipping
     all_values = np.concatenate(data)
     if isinstance(clip, (int, float)) and not isinstance(clip, bool):
-        ylim_upper = clip
+        xlim_upper = clip
     elif clip:
-        ylim_upper = _auto_ylim(all_values)
+        xlim_upper = _auto_limit(all_values)
     else:
-        ylim_upper = None
+        xlim_upper = None
 
     bp = ax.boxplot(
         data,
@@ -237,6 +243,7 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
         widths=0.5,
         patch_artist=True,
         showfliers=False,
+        vert=False,
         zorder=2,
     )
     for patch, colour in zip(bp["boxes"], colours):
@@ -248,17 +255,15 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
             line.set_linewidth(1.2)
 
     rng = np.random.default_rng(42)
-    clipped_points = []  # (x, actual_value, display_y)
-    for i, (lang, pos, vals) in enumerate(zip(languages, positions, data)):
+    clipped_points = []  # (display_x, y, actual_value)
+    for lang, pos, vals in zip(languages, positions, data):
         jitter = rng.uniform(-0.15, 0.15, size=len(vals))
-        for j, v in enumerate(vals):
-            x = pos + jitter[j]
-            if ylim_upper is not None and v > ylim_upper:
-                # Draw at the top edge and record for annotation
-                clipped_points.append((x, v, ylim_upper * 0.97))
+        for y, v in zip(pos + jitter, vals):
+            if xlim_upper is not None and v > xlim_upper:
+                clipped_points.append((xlim_upper * 0.97, y, v))
             else:
                 ax.scatter(
-                    x, v,
+                    v, y,
                     color=PALETTE.get(lang, DEFAULT_COLOUR),
                     edgecolors="white",
                     linewidths=0.5,
@@ -268,32 +273,35 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
                 )
 
     # Annotate clipped points
-    if ylim_upper is not None and clipped_points:
-        ax.set_ylim(top=ylim_upper)
-        for x, actual, display_y in clipped_points:
+    if xlim_upper is not None and clipped_points:
+        ax.set_xlim(right=xlim_upper)
+        for display_x, y, actual in clipped_points:
             ax.scatter(
-                x, display_y,
-                marker="^",
+                display_x, y,
+                marker=">",
                 color="#CC0000",
                 s=40,
                 zorder=4,
             )
             ax.annotate(
                 f"{actual:.0f}",
-                xy=(x, display_y),
-                xytext=(0, 10),
+                xy=(display_x, y),
+                xytext=(6, 0),
                 textcoords="offset points",
                 fontsize=8,
                 fontweight="bold",
-                ha="center",
-                va="bottom",
+                ha="left",
+                va="center",
                 color="#CC0000",
             )
 
-    ax.set_ylim(bottom=0)
-    ax.set_xticks(positions)
-    ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.set_ylabel(ylabel)
+    ax.set_xlim(left=0)
+    ax.set_yticks(positions)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.tick_params(axis="y", labelsize=11)
+    ax.set_xlabel(value_label)
+    ax.set_ylabel("")
     ax.set_title(title, pad=15)
 
 
@@ -332,75 +340,75 @@ def main():
     # ── Total ─────────────────────────────────────────────────────────────
     print("Generating total plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "total_time", ylabel="Time (s)",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "total_time", value_label="Time (s)",
            title=f"Time for {agent_name} to Generate a Mini-Git (v1+v2{trial_suffix})", clip=300)
     save(fig, args.outdir, "total_time")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "total_cost", ylabel="Cost (USD)",
-           title=f"Cost for {agent_name} to Generate a Mini-Git (v1+v2{trial_suffix})", clip=False)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "total_cost", value_label="Cost (USD)",
+           title=f"Cost for {agent_name} to Generate a Mini-Git (v1+v2{trial_suffix})", clip=True)
+    ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
     save(fig, args.outdir, "total_cost")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_loc", ylabel="Lines of code",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_loc", value_label="Lines of code",
            title=f"Lines of Code Generated by {agent_name} (v2)", clip=False)
     save(fig, args.outdir, "total_lines")
 
     # ── v1 ───────────────────────────────────────────────────────────
     print("Generating v1 plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_time", ylabel="Time (s)",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_time", value_label="Time (s)",
            title="Time to Generate a Mini-Git v1 (New Project)", clip=200)
     save(fig, args.outdir, "v1_time")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_cost", ylabel="Cost (USD)",
-           title="Cost to Generate a Mini-Git v1 (New Project)", clip=False)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_cost", value_label="Cost (USD)",
+           title="Cost to Generate a Mini-Git v1 (New Project)", clip=True)
+    ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
     save(fig, args.outdir, "v1_cost")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_loc", ylabel="Lines of code",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_loc", value_label="Lines of code",
            title=f"Lines of Code Generated by {agent_name} (v1)", clip=False)
     save(fig, args.outdir, "v1_lines")
 
     # ── v2 ───────────────────────────────────────────────────────────
     print("Generating v2 plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_time", ylabel="Time (s)",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_time", value_label="Time (s)",
            title="Time to Generate a Mini-Git v2 (Feature Extension)", clip=150)
     save(fig, args.outdir, "v2_time")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_cost", ylabel="Cost (USD)",
-           title="Cost to Generate a Mini-Git v2 (Feature Extension)", clip=False)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_cost", value_label="Cost (USD)",
+           title="Cost to Generate a Mini-Git v2 (Feature Extension)", clip=True)
+    ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
     save(fig, args.outdir, "v2_cost")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_loc", ylabel="Lines of code",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_loc", value_label="Lines of code",
            title=f"Lines of Code Generated by {agent_name} (v2)", clip=False)
     save(fig, args.outdir, "v2_lines")
 
     # ── Turns ─────────────────────────────────────────────────────────────
     print("Generating turn count plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_turns", ylabel="Turns",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_turns", value_label="Turns",
            title="Agent Turns to Generate a Mini-Git v1", clip=25)
     save(fig, args.outdir, "v1_turns")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_turns", ylabel="Turns",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_turns", value_label="Turns",
            title="Agent Turns to Generate a Mini-Git v2", clip=25)
     save(fig, args.outdir, "v2_turns")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "total_turns", ylabel="Turns",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "total_turns", value_label="Turns",
            title="Agent Turns to Generate a Mini-Git (v1+v2)", clip=45)
     save(fig, args.outdir, "total_turns")
 
