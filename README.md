@@ -1,152 +1,168 @@
 # Which Programming Language Is Best for AI Coding Agents?
 
-A quantitative benchmark comparing how efficiently [Claude Code](https://docs.anthropic.com/en/docs/claude-code) generates code across 13 programming languages.
+This repository benchmarks how quickly and cheaply Codex Exec can implement the same small program across many languages.
 
-For a detailed discussion, see the blog post: [Which Programming Language Is Best for Claude Code?](https://dev.to/mame/which-programming-language-is-best-for-claude-code-508a) / [日本語版](https://zenn.dev/mametter/articles/3e8580ec034201)
+The task is a two-phase "MiniGit" exercise:
+- `v1`: build `init`, `add`, `commit`, and `log` from scratch
+- `v2`: extend the passing `v1` workspace with `status`, `diff`, `checkout`, `reset`, `rm`, and `show`
+
+The current checked-in results are a March 2026 snapshot:
+- runner: Codex Exec (`codex-cli 0.111.0`)
+- service tier: `fast`
+- trials: `3` per language
+- configurations: `25`
+- toolchains: see [results/meta.json](./results/meta.json)
+
+The benchmark currently inherits model selection from local Codex config rather than pinning a model in the benchmark command.
 
 ## TL;DR
 
-At least for prototyping-scale tasks, Ruby, Python, and JavaScript (not TypeScript) appear to be the best fit for Claude Code — fastest, cheapest, and most stable.
+- Ruby won cleanly: fastest overall, cheapest overall, and by far the most stable.
+- JavaScript and TypeScript formed the rest of the front pack. On this run, TypeScript beat Python.
+- Every language passed every test in every trial. For Codex, this benchmark mostly measures latency and token budget, not recovery from failure.
+- Static typing was not a universal tax. `python/mypy` was basically tied with plain Python on wall-clock time, while `ruby/steep` was dramatically slower and more expensive than plain Ruby.
+- `zig cc` did not improve the C results over GCC here.
+- Gleam passed, but it was an extreme outlier in time, cost, and token volume. Its LOC figures are also polluted by build artifacts, so line-count comparisons for Gleam should be ignored.
 
-## Motivation
+## Setup
 
-"Static typing prevents AI hallucination bugs!" vs. "Dynamic typing saves tokens!" — qualitative arguments abound, but quantitative data is scarce. This experiment aims to fill that gap.
+Each run asks the agent to read [SPEC-v1.txt](./SPEC-v1.txt) or [SPEC-v2.txt](./SPEC-v2.txt), implement `minigit`, and prove correctness by passing [test-v1.sh](./test-v1.sh) or [test-v2.sh](./test-v2.sh).
 
-## Experiment
-
-We asked Claude Code (Opus 4.6) to implement a **mini-git** — a simplified version of Git — in various programming languages, and measured the time, cost, and lines of code for each.
-
-The task is split into two phases:
-
-* **v1 (New project)**: Implement `init`, `add`, `commit`, and `log`.
-* **v2 (Feature extension)**: Add `status`, `diff`, `checkout`, `reset`, `rm`, and `show`.
-
-The prompt is simply: "Read [SPEC-v1.txt](./SPEC-v1.txt), implement it, and make sure [test-v1.sh](./test-v1.sh) passes." v2 is analogous.
-
-### Languages
+Language configurations:
 
 | Category | Languages |
 |----------|-----------|
-| Dynamic | Python, Ruby, JavaScript, Perl, Lua |
-| Dynamic + type checker | Python/mypy, Ruby/Steep |
-| Static | TypeScript, Go, Rust, C, Java |
-| Functional | Scheme (dynamic), OCaml (static), Haskell (static) |
+| Dynamic | Ruby, Python, JavaScript, PHP, Perl, Lua, Elixir, Gleam, Julia |
+| Dynamic + checker | Ruby/Steep, Python/mypy |
+| Static | TypeScript, Go, Rust, Zig, C, C (zig cc), C++, C#, Java, Kotlin, Swift |
+| Functional | Scheme, OCaml, Haskell |
 
-Python/mypy writes fully type-annotated Python verified with `mypy --strict`. Ruby/Steep writes RBS type signatures verified with `steep check`. These allow direct comparison of type-checking overhead within the same language.
-
-Each language was run **20 times**. A custom hash algorithm (not SHA-256) is used to avoid library-dependent variation.
+`python/mypy` requires strict type-checking. `ruby/steep` requires RBS and `steep check`. `c/zigcc` is the same C task but asks the agent to use `zig cc` instead of GCC or Clang.
 
 ## Results
 
-| Language | Tests passed (v1+v2) | Time (v1+v2) | Avg. cost | LOC (v2) |
-|----------|---------------------:|--------------:|----------:|---------:|
-| Ruby | 40/40 | 73.1s ± 4.2s | $0.36 | 219 |
-| Python | 40/40 | 74.6s ± 4.5s | $0.38 | 235 |
-| JavaScript | 40/40 | 81.1s ± 5.0s | $0.39 | 248 |
-| Go | 40/40 | 101.6s ± 37.0s | $0.50 | 324 |
-| Rust | 38/40 | 113.7s ± 54.8s | $0.54 | 303 |
-| Java | 40/40 | 115.4s ± 34.4s | $0.50 | 303 |
-| Python/mypy | 40/40 | 125.3s ± 19.0s | $0.57 | 326 |
-| OCaml | 40/40 | 128.1s ± 28.9s | $0.58 | 216 |
-| Perl | 40/40 | 130.2s ± 44.2s | $0.55 | 315 |
-| Scheme | 40/40 | 130.6s ± 39.9s | $0.60 | 310 |
-| TypeScript | 40/40 | 133.0s ± 29.4s | $0.62 | 310 |
-| Lua | 40/40 | 143.6s ± 43.0s | $0.58 | 398 |
-| C | 40/40 | 155.8s ± 40.9s | $0.74 | 517 |
-| Haskell | 39/40 | 174.0s ± 44.2s | $0.74 | 224 |
-| Ruby/Steep | 40/40 | 186.6s ± 69.7s | $0.84 | 304 |
+Full tables live in [results/report.md](./results/report.md). Sorted by total time:
 
-Out of 600 runs (15 configurations × 2 phases × 20 trials), only 3 failed: Rust (2) and Haskell (1).
+| Language | Tests | Total Time | Avg Cost |
+|----------|------:|-----------:|---------:|
+| Ruby | 123/123 | 86.9s | $1.27 |
+| JavaScript | 123/123 | 91.8s | $1.35 |
+| TypeScript | 123/123 | 105.8s | $1.61 |
+| Python/mypy | 123/123 | 112.8s | $1.84 |
+| Python | 123/123 | 113.3s | $1.49 |
+| Go | 123/123 | 117.1s | $1.86 |
+| Perl | 123/123 | 118.2s | $1.83 |
+| C++ | 123/123 | 125.8s | $1.64 |
+| OCaml | 123/123 | 133.7s | $1.73 |
+| Lua | 123/123 | 136.1s | $1.71 |
+| Rust | 123/123 | 138.5s | $1.75 |
+| Kotlin | 123/123 | 139.6s | $1.84 |
+| Swift | 123/123 | 140.4s | $2.95 |
+| Haskell | 123/123 | 143.0s | $2.24 |
+| PHP | 123/123 | 144.6s | $1.89 |
+| Scheme | 123/123 | 149.2s | $2.08 |
+| Elixir | 123/123 | 152.3s | $2.40 |
+| Java | 123/123 | 155.7s | $1.85 |
+| Julia | 123/123 | 168.1s | $2.37 |
+| C# | 123/123 | 171.8s | $2.75 |
+| C | 123/123 | 191.9s | $2.06 |
+| Ruby/Steep | 123/123 | 197.0s | $4.07 |
+| C (zig cc) | 123/123 | 199.6s | $2.34 |
+| Zig | 123/123 | 245.8s | $4.47 |
+| Gleam | 123/123 | 496.8s | $11.98 |
 
-### Total Time and Cost (v1 + v2)
+### Total Time and Cost
 
 ![Total time](./figures/total_time.png)
 
 ![Total cost](./figures/total_cost.png)
 
-Ruby, Python, and JavaScript are the top 3 — fast (73–81s), cheap ($0.36–0.39), and stable (low stddev). From 4th place onward, variance increases sharply.
+![Time vs cost](./figures/total_time_vs_cost.png)
 
-Time and cost are strongly correlated:
+Ruby is the standout result, but the bigger story is the front pack behind it. JavaScript and TypeScript were both very strong, and `python/mypy` landed essentially on top of plain Python in total time. Compared with the earlier Claude-oriented version of this benchmark, Codex looks much less allergic to static types than to large or awkward contexts.
 
-![Time vs Cost](./figures/total_time_vs_cost.png)
-
-### Lines of Code (v2)
-
-![Lines of code](./figures/total_lines.png)
-
-OCaml (216), Ruby (219), and Haskell (224) are the most compact. C stands out at 517 lines. Notably, fewer LOC does not imply faster/cheaper generation — OCaml and Haskell are compact but mid-to-low in speed.
-
-![Time vs LOC](./figures/total_time_vs_loc.png)
-
-### v1 (New Project)
+### v1 vs v2
 
 ![v1 time](./figures/v1_time.png)
 
-Python (32.9s) and Ruby (33.2s) lead, followed by JavaScript (36.0s). Ruby/Steep takes 105.0s — 3.2× slower than plain Ruby. v1 starts from an empty directory, so languages requiring project config files (`Cargo.toml`, `package.json`, etc.) incur additional overhead.
-
-### v2 (Feature Extension)
-
 ![v2 time](./figures/v2_time.png)
 
-The gap narrows in v2. The top 3 remain Ruby (40.0s), Python (41.8s), JavaScript (45.1s). Perl (45.7s), OCaml (47.1s), and Lua (47.2s) follow closely. Haskell is the slowest at 99.6s despite having the fewest LOC.
+The phase split is interesting:
+- `v1` favored fast cold starts: JavaScript (`36.1s`), Ruby (`36.8s`), and Python (`40.8s`) led.
+- `v2` favored languages that let Codex edit an existing codebase smoothly: Ruby (`50.1s`) came first, TypeScript (`51.1s`) jumped to second, and JavaScript (`55.7s`) stayed near the top.
+- Scheme was one of the strangest phase shifts: slow in `v1` (`89.6s`) but surprisingly good in `v2` (`59.6s`).
 
-Type-checker overhead: Python/mypy is 1.6–1.7× slower than Python; Ruby/Steep is 2.0–3.2× slower than Ruby.
+## What Stood Out
 
-## Discussion
+### 1. Reliability stopped being the story
 
-> The author is a Ruby committer, so take interpretations with a grain of salt. Data and code are available in this repository — verify for yourself if you're skeptical.
+All `75/75` language-trials passed both phases, and every phase completed in a single agent turn. For this Codex run, the benchmark is mostly about speed and token efficiency, not about whether the agent can eventually recover.
 
-### What causes the speed/cost differences?
+### 2. Ruby's win is not just speed, but consistency
 
-No single factor explains the results. Likely contributors:
+Ruby was not only the fastest overall (`86.9s`), it was also the most stable by a wide margin (`±1.9s` total across 3 trials). That matters if you care about interactive feedback loops rather than just headline averages.
 
-- **Type system**: In this benchmark, dynamic languages are consistently faster and more stable.
-- **Conciseness**: Shorter code generally means faster generation, but OCaml/Haskell are compact yet slow (high thinking-token usage).
-- **Procedural vs. functional**: Excluding the top 3, there isn't a large gap between procedural and functional languages. OCaml notably achieved 47.1s in v2, rivaling JavaScript.
-- **Language difficulty**: C's memory management, Rust's ownership model, and Haskell's monads/purity may add overhead for the AI.
-- **AI familiarity**: Python/Ruby/JavaScript likely have more training data available. Ruby/Steep's larger overhead vs. Python/mypy may reflect lower AI familiarity with Steep.
+### 3. "Dynamic beats static" is too simple
 
-### Does lack of types mean more bugs?
+Static languages did not collapse to the bottom:
+- TypeScript finished third overall.
+- Go and C++ were comfortably in the upper half.
+- `python/mypy` was basically tied with Python on time, though it cost about `24%` more.
 
-Possibly — tests pass, but untested paths may have type errors. That said, the only failures in 600 runs were in Rust and Haskell (both statically typed, both relatively "difficult" languages).
+The worse static-language results look more like toolchain or context penalties than a pure "types are bad for agents" story.
 
-### Does a 2× difference matter?
+### 4. Type-checker overhead was highly asymmetric
 
-Personally, yes. In iterative development ("prompt → wait → think → prompt"), I find the difference between 30s and 60s significantly impacts flow and focus.
+The same "add a checker" move had very different outcomes:
+- Python -> Python/mypy: almost no time penalty, but higher cost
+- Ruby -> Ruby/Steep: `2.27x` slower and `3.20x` more expensive
 
-### Isn't this too small-scale?
+That suggests agent familiarity with a typing workflow matters as much as the presence of types themselves.
 
-Yes — static typing may shine at larger scales. A fair large-scale cross-language benchmark would be valuable. Contributions welcome.
+### 5. Cost tracks context size more than emitted code
 
-### What about ecosystems and runtime performance?
+Time and cost were almost linear in this run: the correlation between average total time and average total cost was `0.97`.
 
-For real projects, framework availability matters — and if runtime speed is essential, a compiled language may be the better choice. This benchmark intentionally avoids external libraries to isolate language-level differences (using a custom hash instead of SHA-256).
+Across the full benchmark:
+- input tokens: `31.0M`
+- cached input tokens: `29.1M`
+- output tokens: `0.68M`
+
+By billed cost share:
+- input tokens: `81.6%`
+- cached input tokens: `7.7%`
+- output tokens: `10.8%`
+
+So this benchmark mostly rewards languages that keep Codex's working context compact.
+
+### 6. I would not over-index on LOC
+
+Once Gleam is excluded, time-vs-LOC is much weaker than time-vs-cost. More importantly, the current LOC counter is not clean for Gleam: it can pick up generated or vendored `.gleam` files under `build/`, which blows up the reported line counts. The time and cost charts are much more trustworthy than the LOC plots right now.
 
 ## Reproducing
 
 ```bash
-ruby benchmark.rb                           # Run all languages × 3 trials
-ruby benchmark.rb --lang python --trials 1  # Single language quick test
-ruby report.rb                              # Generate results/report.md
-python3 plot.py                             # Generate figures/*.png
+ruby benchmark.rb                            # Run all languages × 3 trials
+ruby benchmark.rb --lang ruby --trials 1     # Quick single-language run
+ruby report.rb                               # Generate results/report.md
+uv run plot.py results/results.json          # Generate figures/*.png
 ```
 
-Requirements: Ruby, Claude Code CLI (`claude`), and the target language toolchains.
+Requirements:
+- Ruby
+- Codex CLI (`codex`) configured locally
+- the target language toolchains
+- `uv` for the plotting script
 
-### Repository Structure
-
-- **`main` branch**: Benchmark tools, specs, tests, results, and figures
-- **`data` branch** (orphan): Generated source code and Claude JSON logs for verification
-
-## Summary
-
-At least for prototyping-scale tasks, Ruby, Python, and JavaScript (not TypeScript) appear to be the best fit for Claude Code.
-
-Static typing may become advantageous at larger scales — someone should test this.
-
-The classic strategy — start with a dynamic language, then migrate to a static one as the project matures — may still be the right call. Coding agents seem very capable at cross-language migration (needs verification), making this an increasingly realistic option.
+Outputs:
+- `generated/`: per-trial workspaces
+- `logs/`: Codex JSONL logs
+- `results/results.json`: raw benchmark results
+- `results/report.md`: summary tables
+- `figures/`: chart PNGs
 
 ## Notes
 
-- Evaluated in March 2026. Given the pace of AI progress, results may look different in a few months.
-- This experiment was supported by [the Claude for Open Source Program](https://www.anthropic.com/open-source-program). Thanks Anthropic for 6 months of free Claude Max 20x!
+- This is a small benchmark. It says much more about prototyping-scale agent ergonomics than about long-horizon maintenance or large-system design.
+- The checked-in results are a March 2026 snapshot. Toolchains and models move quickly enough that the ranking will drift.
+- The benchmark currently records Codex CLI version and service tier in metadata, but it inherits the model choice from local Codex config.
