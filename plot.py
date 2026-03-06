@@ -36,7 +36,7 @@ LANG_GROUPS = [
     # Dynamic + type checker
     ["ruby/steep", "python/mypy"],
     # Static (imperative)
-    ["typescript", "go", "rust", "zig", "c", "cpp", "csharp", "java", "kotlin", "swift"],
+    ["typescript", "go", "rust", "zig", "c", "c/zigcc", "cpp", "csharp", "java", "kotlin", "swift"],
     # Functional
     ["scheme", "ocaml", "haskell"],
 ]
@@ -61,6 +61,7 @@ LANG_LABELS = {
     "rust": "Rust",
     "zig": "Zig",
     "c": "C",
+    "c/zigcc": "C (zig cc)",
     "cpp": "C++",
     "csharp": "C#",
     "java": "Java",
@@ -91,6 +92,7 @@ PALETTE = {
     "rust":        "#3088B8",
     "zig":         "#3E8FB0",
     "c":           "#2850A0",
+    "c/zigcc":     "#357266",
     "cpp":         "#3D63B8",
     "csharp":      "#4C79C5",
     "java":        "#50B0D0",
