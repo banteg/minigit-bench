@@ -250,7 +250,11 @@ def run_codex(prompt, dir:, log_path: nil)
     stderr: result[:stderr],
     success: result[:success],
     elapsed_seconds: elapsed.round(1),
-    codex_data: parse_codex_output(result[:stdout], service_tier: service_tier),
+    codex_data: begin
+      data = parse_codex_output(result[:stdout], service_tier: service_tier)
+      data[:duration_ms] = (elapsed * 1000).round if data
+      data
+    end,
   }
 end
 
@@ -305,7 +309,7 @@ puts
 FileUtils.mkdir_p(WORK_DIR)
 FileUtils.mkdir_p(RESULTS_DIR)
 
-# Warmup: run a trivial prompt so Codex's process/cache is hot
+ # Warmup: run a trivial prompt so Codex's process/cache is hot
 unless dry_run
   puts '--- Warmup ---'
   warmup_dir = File.join(WORK_DIR, '.warmup')
