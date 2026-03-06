@@ -32,7 +32,7 @@ plt.rcParams.update({
 # Each group is separated by a gap in the plot.
 LANG_GROUPS = [
     # Dynamic
-    ["ruby", "python", "javascript", "php", "perl", "lua", "elixir", "julia"],
+    ["ruby", "python", "javascript", "php", "perl", "lua", "elixir", "gleam", "julia"],
     # Dynamic + type checker
     ["ruby/steep", "python/mypy"],
     # Static (imperative)
@@ -52,6 +52,7 @@ LANG_LABELS = {
     "perl": "Perl",
     "lua": "Lua",
     "elixir": "Elixir",
+    "gleam": "Gleam",
     "julia": "Julia",
     "scheme": "Scheme",
     "ruby/steep": "Ruby/Steep",
@@ -82,6 +83,7 @@ PALETTE = {
     "perl":        "#D46B1A",
     "lua":         "#C44040",
     "elixir":      "#A84C5A",
+    "gleam":       "#8D5BB6",
     "julia":       "#B15C2E",
     # Dynamic + type checker (warm, lighter)
     "ruby/steep":  "#E8A0A0",

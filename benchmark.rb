@@ -55,7 +55,10 @@ LANGUAGES = {
                                    'After passing the tests, also verify type correctness by running: steep check' },
   'zig'         => { exts: %w[zig],    version_cmd: 'zig version', prompt_name: 'Zig' },
   'lua'         => { exts: %w[lua],    version_cmd: 'lua -v' },
-  'elixir'      => { exts: %w[ex exs], version_cmd: 'elixir --version | head -1' },
+  'elixir'      => { exts: %w[ex exs], version_cmd: 'elixir -e \'IO.puts("Elixir #{System.version()}")\'' },
+  'gleam'       => { exts: %w[gleam],  version_cmd: 'gleam --version', prompt_name: 'Gleam',
+                     extra_prompt: 'Use Gleam targeting Erlang. Include a gleam.toml project, compile the program with Gleam, ' \
+                                   "and provide a ./minigit executable wrapper that runs the built CLI." },
   'julia'       => { exts: %w[jl],     version_cmd: 'julia --version', prompt_name: 'Julia' },
   'php'         => { exts: %w[php],    version_cmd: 'php --version | head -1', prompt_name: 'PHP' },
   'scheme'      => { exts: %w[scm],    version_cmd: 'guile --version | head -1' },
