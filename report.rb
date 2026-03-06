@@ -16,6 +16,18 @@ meta    = JSON.parse(File.read(File.join(RESULTS_DIR, 'meta.json')))
 languages = results.map { |r| r['language'] }.uniq
 versions  = meta['versions'] || {}
 
+LANGUAGE_LABELS = {
+  'c/zigcc' => 'C (zig cc)',
+  'cpp' => 'C++',
+  'csharp' => 'C#',
+  'php' => 'PHP',
+  'ocaml' => 'OCaml',
+  'typescript' => 'TypeScript',
+  'javascript' => 'JavaScript',
+  'python/mypy' => 'Python/mypy',
+  'ruby/steep' => 'Ruby/steep',
+}.freeze
+
 def fmt(n)
   n.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\1,').reverse
 end
@@ -41,6 +53,10 @@ def total_tokens(cd)
     (cd['cache_creation_tokens'] || 0) + (cd['cache_read_tokens'] || 0)
 end
 
+def language_label(lang)
+  LANGUAGE_LABELS[lang] || lang.capitalize
+end
+
 # ---------------------------------------------------------------------------
 report = []
 
@@ -58,7 +74,7 @@ report << ''
 report << '## Language Versions'
 report << '| Language | Version |'
 report << '|----------|---------|'
-languages.each { |l| report << "| #{l.capitalize} | #{versions[l] || 'unknown'} |" }
+languages.each { |l| report << "| #{language_label(l)} | #{versions[l] || 'unknown'} |" }
 report << ''
 
 # ---------------------------------------------------------------------------
@@ -108,7 +124,7 @@ languages.each do |lang|
   end
   avg_cost = total_cost / n
 
-  report << "| #{lang.capitalize} " \
+  report << "| #{language_label(lang)} " \
             "| #{v1_avg}s\u00B1#{v1_sd}s " \
             "| #{v1_turns} " \
             "| #{v1_loc} " \
@@ -149,7 +165,7 @@ languages.each do |lang|
 
   avg_total = ((sum_input + sum_output + sum_cache_create + sum_cache_read) / n).round(0)
 
-  report << "| #{lang.capitalize} " \
+  report << "| #{language_label(lang)} " \
             "| #{fmt((sum_input / n).round(0))} " \
             "| #{fmt((sum_output / n).round(0))} " \
             "| #{fmt((sum_cache_create / n).round(0))} " \
@@ -178,7 +194,7 @@ results.each do |r|
   total_time = ((r['v1_time'] || 0) + (r['v2_time'] || 0)).round(1)
   cost = %w[v1 v2].sum { |ph| agent_field(r, ph, 'cost_usd') }
 
-  report << "| #{r['language'].capitalize} | #{r['trial']} " \
+  report << "| #{language_label(r['language'])} | #{r['trial']} " \
             "| #{r['v1_time']}s | #{v1_turns} | #{r['v1_loc']} | #{v1_tests} " \
             "| #{r['v2_time']}s | #{v2_turns} | #{r['v2_loc']} | #{v2_tests} " \
             "| #{total_time}s | $#{'%.2f' % cost} |"
@@ -197,12 +213,12 @@ results.each do |r|
     data = agent_data(r, phase)
     if data
       tot = total_tokens(data)
-      report << "| #{r['language'].capitalize} | #{r['trial']} | #{phase} " \
+      report << "| #{language_label(r['language'])} | #{r['trial']} | #{phase} " \
                 "| #{fmt(data['input_tokens'] || 0)} | #{fmt(data['output_tokens'] || 0)} " \
                 "| #{fmt(data['cache_creation_tokens'] || 0)} | #{fmt(data['cache_read_tokens'] || 0)} " \
                 "| #{fmt(tot)} | $#{'%.4f' % (data['cost_usd'] || 0)} |"
     else
-      report << "| #{r['language'].capitalize} | #{r['trial']} | #{phase} | - | - | - | - | - | - |"
+      report << "| #{language_label(r['language'])} | #{r['trial']} | #{phase} | - | - | - | - | - | - |"
     end
   end
 end

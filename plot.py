@@ -318,18 +318,20 @@ def main():
     df = load_results(args.json)
     meta = load_meta(args.meta)
     agent_name = meta.get("agent_name", DEFAULT_AGENT_NAME)
+    trials = meta.get("trials")
+    trial_suffix = f", {trials} trials" if trials else ""
 
     # ── Total ─────────────────────────────────────────────────────────────
     print("Generating total plots …")
 
     fig, ax = plt.subplots(figsize=(10, 5))
     boxdot(ax, df, "total_time", ylabel="Time (s)",
-           title=f"Time for {agent_name} to Generate a Mini-Git (v1+v2, 20 trials)", clip=300)
+           title=f"Time for {agent_name} to Generate a Mini-Git (v1+v2{trial_suffix})", clip=300)
     save(fig, args.outdir, "total_time")
 
     fig, ax = plt.subplots(figsize=(10, 5))
     boxdot(ax, df, "total_cost", ylabel="Cost (USD)",
-           title=f"Cost for {agent_name} to Generate a Mini-Git (v1+v2, 20 trials)", clip=False)
+           title=f"Cost for {agent_name} to Generate a Mini-Git (v1+v2{trial_suffix})", clip=False)
     ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
     save(fig, args.outdir, "total_cost")
 
