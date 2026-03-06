@@ -328,8 +328,9 @@ selected_trials.times do |trial_idx|
     FileUtils.cp(File.join(BASE_DIR, 'SPEC-v2.txt'), v2_dir)
     FileUtils.cp(File.join(BASE_DIR, 'test-v2.sh'), v2_dir)
 
-    v2_prompt = "Read SPEC-v2.txt and extend the existing minigit implementation " \
-                "with checkout and reset commands. " \
+    v2_prompt = "You are in a workspace copied from a passing v1 implementation. " \
+                "Read SPEC-v2.txt and modify the existing minigit implementation in place to satisfy the full v2 spec " \
+                "while preserving all v1 behavior. Do not start over unless it is strictly necessary. " \
                 "Verify your implementation passes all tests by running: bash test-v2.sh"
     v2_prompt += " #{LANGUAGES[lang][:extra_prompt]}" if LANGUAGES[lang][:extra_prompt]
 
