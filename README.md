@@ -8,12 +8,14 @@ The task is a two-phase "MiniGit" exercise:
 
 The current checked-in results are a March 2026 snapshot:
 - runner: Codex Exec (`codex-cli 0.111.0`)
+- model: `gpt-5.4`
+- reasoning effort: `medium`
 - service tier: `fast`
 - trials: `3` per language
 - configurations: `25`
 - toolchains: see [results/meta.json](./results/meta.json)
 
-The benchmark currently inherits model selection from local Codex config rather than pinning a model in the benchmark command.
+These checked-in results were run with `gpt-5.4` at `medium` reasoning effort. The benchmark command itself still inherits model settings from local Codex config unless you pin them explicitly.
 
 ## TL;DR
 

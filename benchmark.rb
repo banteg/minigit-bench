@@ -171,7 +171,12 @@ def count_loc(dir, lang)
   config = LANGUAGES[lang]
   exts = config[:exts]
   files = exts.flat_map { |e| Dir.glob(File.join(dir, '**', "*.#{e}")) }
-  files.reject! { |f| f.include?('/node_modules/') || f.include?('/target/') }
+  ignored_paths = %w[/node_modules/ /target/]
+  if lang == 'gleam'
+    # Gleam writes vendored/generated `.gleam` files under build/template dirs.
+    ignored_paths.concat(%w[/build/ /.tmp_gleam_template/ /_template/])
+  end
+  files.reject! { |f| ignored_paths.any? { |path| f.include?(path) } }
 
   # For scripting languages the executable `minigit` IS the source (no extension)
   minigit = File.join(dir, 'minigit')
