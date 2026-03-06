@@ -141,6 +141,22 @@ So this benchmark mostly rewards languages that keep Codex's working context com
 
 Time-vs-LOC is much weaker than time-vs-cost in this dataset. We also had to patch the LOC counter to exclude generated/template Gleam files, which is a reminder that line counts are easier to distort than time or token usage. The time and cost charts are still the strongest signal here.
 
+## Versus Claude Code
+
+For the `15` language configurations shared with the original Claude benchmark, the comparison artifacts live in [results/comparison.md](./results/comparison.md).
+
+Two caveats matter:
+- the Claude run used `10` trials while this Codex run used `3`
+- time ratios are comparable, but cost ratios are influenced by different pricing models, and the Codex run used the `fast` tier
+
+![Rank comparison](./figures/compare_rank.png)
+
+![Time ratio](./figures/compare_time_ratio.png)
+
+![Cost ratio](./figures/compare_cost_ratio.png)
+
+The main pattern is that Codex did not simply shift every language by the same factor. It moved TypeScript up dramatically, improved Haskell and Python/mypy relative to the Claude run, and lost ground on Python, Java, and Rust. Ruby remained first in both runs, which makes it the strongest cross-agent result in the repository.
+
 ## Reproducing
 
 ```bash
@@ -148,6 +164,9 @@ ruby benchmark.rb                            # Run all languages × 3 trials
 ruby benchmark.rb --lang ruby --trials 1     # Quick single-language run
 ruby report.rb                               # Generate results/report.md
 uv run plot.py results/results.json          # Generate figures/*.png
+git show a048632:results/results.json > /tmp/claude-results.json
+git show a048632:results/meta.json > /tmp/claude-meta.json
+uv run plot.py results/results.json --compare-json /tmp/claude-results.json --compare-meta /tmp/claude-meta.json --compare-report results/comparison.md
 ```
 
 Requirements:
