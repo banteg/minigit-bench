@@ -1,4 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "matplotlib",
+#   "numpy",
+#   "pandas",
+# ]
+# ///
 """
 Generate box-and-dot plots for the coding AI language benchmark.
 
@@ -32,11 +40,11 @@ plt.rcParams.update({
 # Each group is separated by a gap in the plot.
 LANG_GROUPS = [
     # Dynamic
-    ["ruby", "python", "javascript", "perl", "lua"],
+    ["ruby", "python", "javascript", "php", "perl", "lua", "elixir", "gleam", "julia"],
     # Dynamic + type checker
     ["ruby/steep", "python/mypy"],
     # Static (imperative)
-    ["typescript", "go", "rust", "c", "java"],
+    ["typescript", "go", "rust", "zig", "c", "c/zigcc", "cpp", "csharp", "java", "kotlin", "swift"],
     # Functional
     ["scheme", "ocaml", "haskell"],
 ]
@@ -48,16 +56,26 @@ LANG_LABELS = {
     "ruby": "Ruby",
     "python": "Python",
     "javascript": "JavaScript",
+    "php": "PHP",
     "perl": "Perl",
     "lua": "Lua",
+    "elixir": "Elixir",
+    "gleam": "Gleam",
+    "julia": "Julia",
     "scheme": "Scheme",
     "ruby/steep": "Ruby/Steep",
     "python/mypy": "Python/mypy",
     "typescript": "TypeScript",
     "go": "Go",
     "rust": "Rust",
+    "zig": "Zig",
     "c": "C",
+    "c/zigcc": "C (zig cc)",
+    "cpp": "C++",
+    "csharp": "C#",
     "java": "Java",
+    "kotlin": "Kotlin",
+    "swift": "Swift",
     "ocaml": "OCaml",
     "haskell": "Haskell",
 }
@@ -69,8 +87,12 @@ PALETTE = {
     "ruby":        "#CC342D",
     "python":      "#E06030",
     "javascript":  "#E8A020",
+    "php":         "#B48E1D",
     "perl":        "#D46B1A",
     "lua":         "#C44040",
+    "elixir":      "#A84C5A",
+    "gleam":       "#8D5BB6",
+    "julia":       "#B15C2E",
     # Dynamic + type checker (warm, lighter)
     "ruby/steep":  "#E8A0A0",
     "python/mypy": "#F0C090",
@@ -78,17 +100,34 @@ PALETTE = {
     "typescript":  "#2266BB",
     "go":          "#00A0C8",
     "rust":        "#3088B8",
+    "zig":         "#3E8FB0",
     "c":           "#2850A0",
+    "c/zigcc":     "#357266",
+    "cpp":         "#3D63B8",
+    "csharp":      "#4C79C5",
     "java":        "#50B0D0",
+    "kotlin":      "#5A9FE0",
+    "swift":       "#79B8D9",
     # Functional (grey/purple)
     "scheme":      "#888888",
     "ocaml":       "#A0A0A0",
     "haskell":     "#606060",
 }
 DEFAULT_COLOUR = "#999999"
+DEFAULT_AGENT_NAME = "Agent"
+DEFAULT_COMPARE_LABEL = "Baseline"
 
 
 # ── Load data ─────────────────────────────────────────────────────────────
+
+def phase_agent_data(record, phase):
+    return (
+        record.get(f"{phase}_agent")
+        or record.get(f"{phase}_codex")
+        or record.get(f"{phase}_claude")
+        or {}
+    )
+
 
 def load_results(path):
     """Load results.json and return a flat DataFrame."""
@@ -99,8 +138,8 @@ def load_results(path):
     for r in raw:
         lang = r["language"]
         trial = r["trial"]
-        v1c = r.get("v1_claude", {})
-        v2c = r.get("v2_claude", {})
+        v1c = phase_agent_data(r, "v1")
+        v2c = phase_agent_data(r, "v2")
         rows.append({
             "language": lang,
             "trial": trial,
@@ -123,10 +162,28 @@ def load_results(path):
     return pd.DataFrame(rows)
 
 
+def load_meta(path):
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def summarize_results(df):
+    return (
+        df.groupby("language", as_index=False)
+        .agg(
+            total_time=("total_time", "mean"),
+            total_cost=("total_cost", "mean"),
+            v2_loc=("v2_loc", "mean"),
+        )
+    )
+
+
 # ── Plotting helper ───────────────────────────────────────────────────────
 
 def _compute_positions(languages):
-    """Compute x positions with gaps between groups."""
+    """Compute category positions with gaps between groups."""
     # Build a set for quick lookup of group boundaries
     group_starts = set()
     pos = 0
@@ -146,8 +203,8 @@ def _compute_positions(languages):
     return positions
 
 
-def _auto_ylim(all_values):
-    """Return a y-axis upper limit that clips extreme outliers, or None."""
+def _auto_limit(all_values):
+    """Return an axis upper limit that clips extreme outliers, or None."""
     if len(all_values) == 0:
         return None
     q75 = np.percentile(all_values, 75)
@@ -161,8 +218,14 @@ def _auto_ylim(all_values):
     return None
 
 
-def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
-    """Draw a box plot with overlaid dot (strip) plot.
+def category_figure_size(df):
+    """Return a readable figure size for many horizontal categories."""
+    lang_count = df["language"].nunique()
+    return (11, max(8, 0.42 * lang_count + 1.5))
+
+
+def boxdot(ax, df, value_col, *, value_label, title, clip=True):
+    """Draw a horizontal box plot with overlaid dot (strip) plot.
 
     clip: True for auto IQR clipping, False for no clipping,
           or a number for a fixed upper limit.
@@ -177,14 +240,14 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
     labels = [LANG_LABELS.get(lang, lang) for lang in languages]
     positions = _compute_positions(languages)
 
-    # Determine y-axis clipping
+    # Determine x-axis clipping
     all_values = np.concatenate(data)
     if isinstance(clip, (int, float)) and not isinstance(clip, bool):
-        ylim_upper = clip
+        xlim_upper = clip
     elif clip:
-        ylim_upper = _auto_ylim(all_values)
+        xlim_upper = _auto_limit(all_values)
     else:
-        ylim_upper = None
+        xlim_upper = None
 
     bp = ax.boxplot(
         data,
@@ -192,6 +255,7 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
         widths=0.5,
         patch_artist=True,
         showfliers=False,
+        vert=False,
         zorder=2,
     )
     for patch, colour in zip(bp["boxes"], colours):
@@ -203,17 +267,15 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
             line.set_linewidth(1.2)
 
     rng = np.random.default_rng(42)
-    clipped_points = []  # (x, actual_value, display_y)
-    for i, (lang, pos, vals) in enumerate(zip(languages, positions, data)):
+    clipped_points = []  # (display_x, y, actual_value)
+    for lang, pos, vals in zip(languages, positions, data):
         jitter = rng.uniform(-0.15, 0.15, size=len(vals))
-        for j, v in enumerate(vals):
-            x = pos + jitter[j]
-            if ylim_upper is not None and v > ylim_upper:
-                # Draw at the top edge and record for annotation
-                clipped_points.append((x, v, ylim_upper * 0.97))
+        for y, v in zip(pos + jitter, vals):
+            if xlim_upper is not None and v > xlim_upper:
+                clipped_points.append((xlim_upper * 0.97, y, v))
             else:
                 ax.scatter(
-                    x, v,
+                    v, y,
                     color=PALETTE.get(lang, DEFAULT_COLOUR),
                     edgecolors="white",
                     linewidths=0.5,
@@ -223,32 +285,35 @@ def boxdot(ax, df, value_col, *, ylabel, title, clip=True):
                 )
 
     # Annotate clipped points
-    if ylim_upper is not None and clipped_points:
-        ax.set_ylim(top=ylim_upper)
-        for x, actual, display_y in clipped_points:
+    if xlim_upper is not None and clipped_points:
+        ax.set_xlim(right=xlim_upper)
+        for display_x, y, actual in clipped_points:
             ax.scatter(
-                x, display_y,
-                marker="^",
+                display_x, y,
+                marker=">",
                 color="#CC0000",
                 s=40,
                 zorder=4,
             )
             ax.annotate(
                 f"{actual:.0f}",
-                xy=(x, display_y),
-                xytext=(0, 10),
+                xy=(display_x, y),
+                xytext=(6, 0),
                 textcoords="offset points",
                 fontsize=8,
                 fontweight="bold",
-                ha="center",
-                va="bottom",
+                ha="left",
+                va="center",
                 color="#CC0000",
             )
 
-    ax.set_ylim(bottom=0)
-    ax.set_xticks(positions)
-    ax.set_xticklabels(labels, rotation=30, ha="right")
-    ax.set_ylabel(ylabel)
+    ax.set_xlim(left=0)
+    ax.set_yticks(positions)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.tick_params(axis="y", labelsize=11)
+    ax.set_xlabel(value_label)
+    ax.set_ylabel("")
     ax.set_title(title, pad=15)
 
 
@@ -257,6 +322,117 @@ def save(fig, outdir, name):
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  saved {path}")
+
+
+def ordered_languages(values):
+    langs = [l for l in LANG_ORDER if l in values]
+    for lang in sorted(values):
+        if lang not in langs:
+            langs.append(lang)
+    return langs
+
+
+def compare_table_rows(current_summary, baseline_summary):
+    current = current_summary.set_index("language")
+    baseline = baseline_summary.set_index("language")
+    common = ordered_languages(set(current.index) & set(baseline.index))
+
+    current_rank = {
+        lang: idx + 1
+        for idx, lang in enumerate(current.loc[common].sort_values("total_time").index)
+    }
+    baseline_rank = {
+        lang: idx + 1
+        for idx, lang in enumerate(baseline.loc[common].sort_values("total_time").index)
+    }
+
+    rows = []
+    for lang in common:
+        cur = current.loc[lang]
+        base = baseline.loc[lang]
+        rows.append({
+            "language": lang,
+            "current_time": cur["total_time"],
+            "baseline_time": base["total_time"],
+            "time_ratio": cur["total_time"] / base["total_time"],
+            "current_cost": cur["total_cost"],
+            "baseline_cost": base["total_cost"],
+            "cost_ratio": cur["total_cost"] / base["total_cost"],
+            "current_rank": current_rank[lang],
+            "baseline_rank": baseline_rank[lang],
+            "rank_delta": baseline_rank[lang] - current_rank[lang],
+        })
+    return pd.DataFrame(rows)
+
+
+def plot_rank_slope(ax, compare_df, *, current_label, baseline_label):
+    ax.set_title(f"Rank by Total Time: {baseline_label} vs {current_label}", pad=15)
+    ax.set_xlim(-0.1, 1.1)
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels([baseline_label, current_label])
+    ax.set_ylabel("Rank (lower is better)")
+    ax.invert_yaxis()
+
+    for _, row in compare_df.iterrows():
+        colour = PALETTE.get(row["language"], DEFAULT_COLOUR)
+        ax.plot(
+            [0, 1],
+            [row["baseline_rank"], row["current_rank"]],
+            color=colour,
+            linewidth=2,
+            alpha=0.85,
+            zorder=2,
+        )
+        ax.scatter([0, 1], [row["baseline_rank"], row["current_rank"]], color=colour, s=35, zorder=3)
+        ax.text(-0.03, row["baseline_rank"], LANG_LABELS.get(row["language"], row["language"]),
+                ha="right", va="center", fontsize=9, color=colour)
+        ax.text(1.03, row["current_rank"], LANG_LABELS.get(row["language"], row["language"]),
+                ha="left", va="center", fontsize=9, color=colour)
+
+
+def plot_ratio_bars(ax, compare_df, value_col, *, title, xlabel):
+    ordered = compare_df.sort_values(value_col)
+    y = np.arange(len(ordered))
+    colours = [PALETTE.get(lang, DEFAULT_COLOUR) for lang in ordered["language"]]
+    labels = [LANG_LABELS.get(lang, lang) for lang in ordered["language"]]
+    ax.barh(y, ordered[value_col], color=colours, alpha=0.8)
+    ax.axvline(1.0, color="#333333", linestyle="--", linewidth=1.2)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlabel(xlabel)
+    ax.set_title(title, pad=15)
+    for yi, value in zip(y, ordered[value_col]):
+        ax.text(value + 0.015, yi, f"{value:.2f}x", va="center", ha="left", fontsize=9)
+
+
+def write_comparison_report(path, compare_df, *, current_label, baseline_label, current_trials, baseline_trials):
+    lines = [
+        "# Benchmark Comparison",
+        "",
+        f"Shared configurations compared between **{baseline_label}** ({baseline_trials} trials) and **{current_label}** ({current_trials} trials).",
+        "",
+        "Time ratios are directly comparable. Cost ratios are less apples-to-apples because they reflect each agent's published pricing, and the Codex run used the `fast` service tier.",
+        "",
+        "| Language | "
+        f"{baseline_label} Time | {current_label} Time | Time Ratio | "
+        f"{baseline_label} Cost | {current_label} Cost | Cost Ratio | Rank Change |",
+        "|----------|"
+        + "----------------:|" * 6
+        + "------------:|",
+    ]
+
+    for _, row in compare_df.sort_values("current_time").iterrows():
+        rank_delta = int(row["rank_delta"])
+        delta_text = f"{rank_delta:+d}"
+        lines.append(
+            f"| {LANG_LABELS.get(row['language'], row['language'])} | "
+            f"{row['baseline_time']:.1f}s | {row['current_time']:.1f}s | {row['time_ratio']:.2f}x | "
+            f"${row['baseline_cost']:.2f} | ${row['current_cost']:.2f} | {row['cost_ratio']:.2f}x | {delta_text} |"
+        )
+
+    path.write_text("\n".join(lines) + "\n")
+    print(f"  wrote {path}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
@@ -268,6 +444,26 @@ def main():
         "-o", "--outdir", type=Path, default=Path("figures"),
         help="Output directory (default: figures/)",
     )
+    parser.add_argument(
+        "--meta", type=Path, default=Path("results/meta.json"),
+        help="Path to meta.json (default: results/meta.json)",
+    )
+    parser.add_argument(
+        "--compare-json", type=Path,
+        help="Optional baseline results.json for comparison charts",
+    )
+    parser.add_argument(
+        "--compare-meta", type=Path,
+        help="Optional baseline meta.json for comparison charts",
+    )
+    parser.add_argument(
+        "--compare-label", default=DEFAULT_COMPARE_LABEL,
+        help="Display label for the baseline run",
+    )
+    parser.add_argument(
+        "--compare-report", type=Path,
+        help="Optional markdown output path for the comparison table",
+    )
     args = parser.parse_args()
 
     if not args.json.exists():
@@ -275,79 +471,83 @@ def main():
 
     args.outdir.mkdir(parents=True, exist_ok=True)
     df = load_results(args.json)
+    meta = load_meta(args.meta)
+    agent_name = meta.get("agent_name", DEFAULT_AGENT_NAME)
+    trials = meta.get("trials")
+    trial_suffix = f", {trials} trials" if trials else ""
 
     # ── Total ─────────────────────────────────────────────────────────────
     print("Generating total plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "total_time", ylabel="Time (s)",
-           title="Time for Claude Code to Generate a Mini-Git (v1+v2, 20 trials)", clip=300)
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "total_time", value_label="Time (s)",
+           title=f"Time for {agent_name} to Generate a Mini-Git (v1+v2{trial_suffix})", clip=300)
     save(fig, args.outdir, "total_time")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "total_cost", ylabel="Cost (USD)",
-           title="Cost for Claude Code to Generate a Mini-Git (v1+v2, 20 trials)", clip=False)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "total_cost", value_label="Cost (USD)",
+           title=f"Cost for {agent_name} to Generate a Mini-Git (v1+v2{trial_suffix})", clip=True)
+    ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
     save(fig, args.outdir, "total_cost")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_loc", ylabel="Lines of code",
-           title="Lines of Code Generated by Claude Code (v2)", clip=False)
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_loc", value_label="Lines of code",
+           title=f"Lines of Code Generated by {agent_name} (v2)", clip=False)
     save(fig, args.outdir, "total_lines")
 
     # ── v1 ───────────────────────────────────────────────────────────
     print("Generating v1 plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_time", ylabel="Time (s)",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_time", value_label="Time (s)",
            title="Time to Generate a Mini-Git v1 (New Project)", clip=200)
     save(fig, args.outdir, "v1_time")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_cost", ylabel="Cost (USD)",
-           title="Cost to Generate a Mini-Git v1 (New Project)", clip=False)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_cost", value_label="Cost (USD)",
+           title="Cost to Generate a Mini-Git v1 (New Project)", clip=True)
+    ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
     save(fig, args.outdir, "v1_cost")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_loc", ylabel="Lines of code",
-           title="Lines of Code Generated by Claude Code (v1)", clip=False)
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_loc", value_label="Lines of code",
+           title=f"Lines of Code Generated by {agent_name} (v1)", clip=False)
     save(fig, args.outdir, "v1_lines")
 
     # ── v2 ───────────────────────────────────────────────────────────
     print("Generating v2 plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_time", ylabel="Time (s)",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_time", value_label="Time (s)",
            title="Time to Generate a Mini-Git v2 (Feature Extension)", clip=150)
     save(fig, args.outdir, "v2_time")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_cost", ylabel="Cost (USD)",
-           title="Cost to Generate a Mini-Git v2 (Feature Extension)", clip=False)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_cost", value_label="Cost (USD)",
+           title="Cost to Generate a Mini-Git v2 (Feature Extension)", clip=True)
+    ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("$%.2f"))
     save(fig, args.outdir, "v2_cost")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_loc", ylabel="Lines of code",
-           title="Lines of Code Generated by Claude Code (v2)", clip=False)
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_loc", value_label="Lines of code",
+           title=f"Lines of Code Generated by {agent_name} (v2)", clip=False)
     save(fig, args.outdir, "v2_lines")
 
     # ── Turns ─────────────────────────────────────────────────────────────
     print("Generating turn count plots …")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v1_turns", ylabel="Turns",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v1_turns", value_label="Turns",
            title="Agent Turns to Generate a Mini-Git v1", clip=25)
     save(fig, args.outdir, "v1_turns")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "v2_turns", ylabel="Turns",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "v2_turns", value_label="Turns",
            title="Agent Turns to Generate a Mini-Git v2", clip=25)
     save(fig, args.outdir, "v2_turns")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    boxdot(ax, df, "total_turns", ylabel="Turns",
+    fig, ax = plt.subplots(figsize=category_figure_size(df))
+    boxdot(ax, df, "total_turns", value_label="Turns",
            title="Agent Turns to Generate a Mini-Git (v1+v2)", clip=45)
     save(fig, args.outdir, "total_turns")
 
@@ -421,6 +621,54 @@ def main():
         save(fig, args.outdir, f"{suffix}_time_vs_loc")
 
     print("Done.")
+
+    if args.compare_json:
+        print("Generating comparison artifacts …")
+        compare_df = load_results(args.compare_json)
+        compare_meta = load_meta(args.compare_meta) if args.compare_meta else {}
+        baseline_label = (
+            compare_meta.get("agent_name")
+            or ("Claude Code" if compare_meta.get("claude_version") else None)
+            or args.compare_label
+        )
+        current_summary = summarize_results(df)
+        baseline_summary = summarize_results(compare_df)
+        comparison = compare_table_rows(current_summary, baseline_summary)
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        plot_rank_slope(ax, comparison, current_label=agent_name, baseline_label=baseline_label)
+        save(fig, args.outdir, "compare_rank")
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        plot_ratio_bars(
+            ax,
+            comparison,
+            "time_ratio",
+            title=f"Total Time Ratio: {agent_name} / {baseline_label}",
+            xlabel="Ratio (< 1.0 means current run is faster)",
+        )
+        save(fig, args.outdir, "compare_time_ratio")
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        plot_ratio_bars(
+            ax,
+            comparison,
+            "cost_ratio",
+            title=f"Total Cost Ratio: {agent_name} / {baseline_label}",
+            xlabel="Ratio (< 1.0 means current run is cheaper)",
+        )
+        ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("%.2fx"))
+        save(fig, args.outdir, "compare_cost_ratio")
+
+        if args.compare_report:
+            write_comparison_report(
+                args.compare_report,
+                comparison,
+                current_label=agent_name,
+                baseline_label=baseline_label,
+                current_trials=meta.get("trials", "?"),
+                baseline_trials=compare_meta.get("trials", "?"),
+            )
 
 
 if __name__ == "__main__":

@@ -15,14 +15,35 @@ LOGS_DIR    = File.join(BASE_DIR, 'logs')
 
 GO_DIR = File.join(Dir.home, '.local', 'go')
 NPM_PREFIX = File.join(Dir.home, '.local', 'npm')
+CODEX_CONFIG_PATH = File.join(Dir.home, '.codex', 'config.toml')
+
+CODEX_PRICING = {
+  'standard' => {
+    input_per_million: 2.50,
+    cached_input_per_million: 0.25,
+    output_per_million: 15.00,
+  },
+  'fast' => {
+    input_per_million: 5.00,
+    cached_input_per_million: 0.50,
+    output_per_million: 30.00,
+  },
+}.freeze
 
 LANGUAGES = {
   'rust'        => { exts: %w[rs],     version_cmd: 'rustc --version' },
   'go'          => { exts: %w[go],     version_cmd: "#{GO_DIR}/bin/go version" },
   'c'           => { exts: %w[c h],    version_cmd: 'gcc --version | head -1' },
+  'c/zigcc'     => { exts: %w[c h],    version_cmd: 'printf "zig %s\n" "$(zig version)"',
+                     prompt_name: 'C',
+                     extra_prompt: 'Use zig cc as the C compiler in your build script or Makefile instead of gcc or clang.' },
+  'cpp'         => { exts: %w[cpp cc cxx h hpp hh hxx], version_cmd: 'g++ --version | head -1', prompt_name: 'C++' },
+  'csharp'      => { exts: %w[cs],     version_cmd: 'dotnet --version || csc -version', prompt_name: 'C#' },
   'typescript'  => { exts: %w[ts],     version_cmd: "#{NPM_PREFIX}/bin/tsx --version" },
   'javascript'  => { exts: %w[js],     version_cmd: 'node --version' },
   'java'        => { exts: %w[java],   version_cmd: 'java --version 2>&1 | head -1' },
+  'kotlin'      => { exts: %w[kt kts], version_cmd: 'kotlinc -version 2>&1 | head -1' },
+  'swift'       => { exts: %w[swift],  version_cmd: 'swift --version | head -1' },
   'perl'        => { exts: %w[pl pm],  version_cmd: 'perl --version | head -2 | tail -1' },
   'python'      => { exts: %w[py],     version_cmd: 'python3 --version' },
   'python/mypy' => { exts: %w[py],     version_cmd: 'python3 --version && mypy --version',
@@ -32,7 +53,14 @@ LANGUAGES = {
   'ruby/steep'  => { exts: %w[rb rbs], version_cmd: 'ruby --version && steep --version',
                      extra_prompt: 'Write Ruby code with RBS type signatures. Create .rbs files for all Ruby source files. ' \
                                    'After passing the tests, also verify type correctness by running: steep check' },
+  'zig'         => { exts: %w[zig],    version_cmd: 'zig version', prompt_name: 'Zig' },
   'lua'         => { exts: %w[lua],    version_cmd: 'lua -v' },
+  'elixir'      => { exts: %w[ex exs], version_cmd: 'elixir -e \'IO.puts("Elixir #{System.version()}")\'' },
+  'gleam'       => { exts: %w[gleam],  version_cmd: 'gleam --version', prompt_name: 'Gleam',
+                     extra_prompt: 'Use Gleam targeting Erlang. Include a gleam.toml project, compile the program with Gleam, ' \
+                                   "and provide a ./minigit executable wrapper that runs the built CLI." },
+  'julia'       => { exts: %w[jl],     version_cmd: 'julia --version', prompt_name: 'Julia' },
+  'php'         => { exts: %w[php],    version_cmd: 'php --version | head -1', prompt_name: 'PHP' },
   'scheme'      => { exts: %w[scm],    version_cmd: 'guile --version | head -1' },
   'ocaml'       => { exts: %w[ml mli], version_cmd: 'ocaml --version' },
   'haskell'     => { exts: %w[hs],     version_cmd: 'ghc --version' },
@@ -115,11 +143,40 @@ def get_version(lang)
   end
 end
 
+def prompt_language_name(lang)
+  LANGUAGES[lang][:prompt_name] || lang.capitalize
+end
+
+def codex_service_tier
+  return @codex_service_tier if defined?(@codex_service_tier)
+
+  tier = 'standard'
+  if File.exist?(CODEX_CONFIG_PATH)
+    config = File.read(CODEX_CONFIG_PATH, encoding: 'UTF-8')
+    tier = Regexp.last_match(1) if config =~ /^\s*service_tier\s*=\s*"([^"]+)"/
+  end
+
+  @codex_service_tier = CODEX_PRICING.key?(tier) ? tier : 'standard'
+end
+
+def codex_cost_usd(input_tokens:, cache_read_tokens:, output_tokens:, service_tier:)
+  rates = CODEX_PRICING.fetch(service_tier)
+
+  ((input_tokens * rates[:input_per_million]) +
+   (cache_read_tokens * rates[:cached_input_per_million]) +
+   (output_tokens * rates[:output_per_million])) / 1_000_000.0
+end
+
 def count_loc(dir, lang)
   config = LANGUAGES[lang]
   exts = config[:exts]
   files = exts.flat_map { |e| Dir.glob(File.join(dir, '**', "*.#{e}")) }
-  files.reject! { |f| f.include?('/node_modules/') || f.include?('/target/') }
+  ignored_paths = %w[/node_modules/ /target/]
+  if lang == 'gleam'
+    # Gleam writes vendored/generated `.gleam` files under build/template dirs.
+    ignored_paths.concat(%w[/build/ /.tmp_gleam_template/ /_template/])
+  end
+  files.reject! { |f| ignored_paths.any? { |path| f.include?(path) } }
 
   # For scripting languages the executable `minigit` IS the source (no extension)
   minigit = File.join(dir, 'minigit')
@@ -141,33 +198,48 @@ def count_loc(dir, lang)
   end
 end
 
-def parse_claude_output(raw_output)
+def parse_codex_output(raw_output, service_tier:)
   raw_output = raw_output.dup.force_encoding('UTF-8')
-  events = JSON.parse(raw_output.strip)
-  events = [events] unless events.is_a?(Array)
-  result_event = events.reverse.find { |e| e.is_a?(Hash) && e['type'] == 'result' }
-  return nil unless result_event
+  events = raw_output.lines.filter_map do |line|
+    stripped = line.strip
+    next if stripped.empty?
 
-  usage = result_event['usage'] || {}
+    JSON.parse(stripped)
+  end
+
+  turn_events = events.select { |e| e.is_a?(Hash) && e['type'] == 'turn.completed' }
+  return nil if turn_events.empty?
+
+  input_tokens = turn_events.sum { |e| e.dig('usage', 'input_tokens') || 0 }
+  output_tokens = turn_events.sum { |e| e.dig('usage', 'output_tokens') || 0 }
+  cache_read_tokens = turn_events.sum { |e| e.dig('usage', 'cached_input_tokens') || 0 }
+
   {
-    input_tokens: usage['input_tokens'] || 0,
-    output_tokens: usage['output_tokens'] || 0,
-    cache_creation_tokens: usage['cache_creation_input_tokens'] || 0,
-    cache_read_tokens: usage['cache_read_input_tokens'] || 0,
-    cost_usd: result_event['total_cost_usd'] || 0.0,
-    num_turns: result_event['num_turns'] || 0,
-    duration_ms: result_event['duration_ms'] || 0,
+    input_tokens: input_tokens,
+    output_tokens: output_tokens,
+    cache_creation_tokens: 0,
+    cache_read_tokens: cache_read_tokens,
+    cost_usd: codex_cost_usd(
+      input_tokens: input_tokens,
+      cache_read_tokens: cache_read_tokens,
+      output_tokens: output_tokens,
+      service_tier: service_tier
+    ),
+    num_turns: turn_events.length,
+    duration_ms: 0,
   }
 rescue JSON::ParserError => e
-  puts "  WARNING: Failed to parse Claude JSON output: #{e.message}"
+  puts "  WARNING: Failed to parse Codex JSON output: #{e.message}"
   nil
 end
 
-def run_claude(prompt, dir:, log_path: nil)
-  env_prefix = "unset CLAUDECODE && export PATH=#{extra_path}:$PATH && "
-  cmd = "#{env_prefix}claude -p #{Shellwords.escape(prompt)} --dangerously-skip-permissions --output-format json"
+def run_codex(prompt, dir:, log_path: nil)
+  env_prefix = "export PATH=#{extra_path}:$PATH && "
+  cmd = "#{env_prefix}codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox " \
+        "-C #{Shellwords.escape(dir)} #{Shellwords.escape(prompt)}"
+  service_tier = codex_service_tier
 
-  puts "  Running Claude..."
+  puts "  Running Codex..."
   start_time = Time.now
   result = run_cmd(cmd, dir: dir, timeout: 1200)
   elapsed = Time.now - start_time
@@ -183,7 +255,11 @@ def run_claude(prompt, dir:, log_path: nil)
     stderr: result[:stderr],
     success: result[:success],
     elapsed_seconds: elapsed.round(1),
-    claude_data: parse_claude_output(result[:stdout]),
+    codex_data: begin
+      data = parse_codex_output(result[:stdout], service_tier: service_tier)
+      data[:duration_ms] = (elapsed * 1000).round if data
+      data
+    end,
   }
 end
 
@@ -209,14 +285,15 @@ end
 # ---------------------------------------------------------------------------
 
 puts '=' * 60
-puts 'Claude Code Language Benchmark'
+puts 'Codex Exec Language Benchmark'
 puts '=' * 60
 puts
 
-claude_version_result = run_cmd('claude --version 2>/dev/null || echo unknown')
-claude_version = claude_version_result[:stdout].strip
+codex_version_result = run_cmd('codex --version 2>/dev/null || echo unknown')
+codex_version = codex_version_result[:stdout].strip
 
-puts "Claude Version: #{claude_version}"
+puts "Codex Version: #{codex_version}"
+puts "Codex Service Tier: #{codex_service_tier}"
 puts "Languages: #{languages_to_run.join(', ')}"
 puts "Trials: #{selected_start}..#{selected_start + selected_trials - 1} (#{selected_trials} trials)"
 puts "Dry run: #{dry_run}"
@@ -237,12 +314,12 @@ puts
 FileUtils.mkdir_p(WORK_DIR)
 FileUtils.mkdir_p(RESULTS_DIR)
 
-# Warmup: run a trivial prompt so Claude's process/cache is hot
+ # Warmup: run a trivial prompt so Codex's process/cache is hot
 unless dry_run
   puts '--- Warmup ---'
   warmup_dir = File.join(WORK_DIR, '.warmup')
   FileUtils.mkdir_p(warmup_dir)
-  warmup_result = run_claude('Respond with just the word OK.', dir: warmup_dir)
+  warmup_result = run_codex('Respond with just the word OK.', dir: warmup_dir)
   puts "  Warmup done in #{warmup_result[:elapsed_seconds]}s (success=#{warmup_result[:success]})"
   FileUtils.rm_rf(warmup_dir)
   puts
@@ -268,7 +345,7 @@ selected_trials.times do |trial_idx|
       language: lang, trial: trial, v1_dir: v1_dir, v2_dir: v2_dir,
       v1_time: nil, v1_pass: false, v1_passed_count: 0, v1_failed_count: 0, v1_total_count: 0, v1_loc: 0,
       v2_time: nil, v2_pass: false, v2_passed_count: 0, v2_failed_count: 0, v2_total_count: 0, v2_loc: 0,
-      v1_claude: nil, v2_claude: nil,
+      v1_agent: nil, v2_agent: nil,
     }
 
     # --- Phase 1: v1 ---
@@ -276,7 +353,7 @@ selected_trials.times do |trial_idx|
     FileUtils.cp(File.join(BASE_DIR, 'SPEC-v1.txt'), v1_dir)
     FileUtils.cp(File.join(BASE_DIR, 'test-v1.sh'), v1_dir)
 
-    v1_prompt = "Implement minigit as described in SPEC-v1.txt using #{lang.capitalize}. " \
+    v1_prompt = "Implement minigit as described in SPEC-v1.txt using #{prompt_language_name(lang)}. " \
                 "The executable must be named 'minigit' and be runnable as ./minigit. " \
                 "For compiled languages, include a Makefile or build script. " \
                 "For interpreted languages, ensure the minigit file has a proper shebang line and is executable. " \
@@ -284,14 +361,14 @@ selected_trials.times do |trial_idx|
     v1_prompt += " #{LANGUAGES[lang][:extra_prompt]}" if LANGUAGES[lang][:extra_prompt]
 
     if dry_run
-      puts "  [DRY RUN] Would run Claude with prompt for v1 #{lang}"
+      puts "  [DRY RUN] Would run Codex with prompt for v1 #{lang}"
       record[:v1_time] = 0
     else
       v1_log = File.join(LOGS_DIR, "minigit-#{dir_name}-#{trial}-v1.json")
-      v1_result = run_claude(v1_prompt, dir: v1_dir, log_path: v1_log)
+      v1_result = run_codex(v1_prompt, dir: v1_dir, log_path: v1_log)
       record[:v1_time] = v1_result[:elapsed_seconds]
-      record[:v1_claude] = v1_result[:claude_data]
-      puts "  Claude finished in #{v1_result[:elapsed_seconds]}s (success=#{v1_result[:success]})"
+      record[:v1_agent] = v1_result[:codex_data]
+      puts "  Codex finished in #{v1_result[:elapsed_seconds]}s (success=#{v1_result[:success]})"
 
       puts '  Running v1 tests...'
       test_result = run_tests('test-v1.sh', dir: v1_dir)
@@ -311,20 +388,21 @@ selected_trials.times do |trial_idx|
     FileUtils.cp(File.join(BASE_DIR, 'SPEC-v2.txt'), v2_dir)
     FileUtils.cp(File.join(BASE_DIR, 'test-v2.sh'), v2_dir)
 
-    v2_prompt = "Read SPEC-v2.txt and extend the existing minigit implementation " \
-                "with checkout and reset commands. " \
+    v2_prompt = "You are in a workspace copied from a passing v1 implementation. " \
+                "Read SPEC-v2.txt and modify the existing minigit implementation in place to satisfy the full v2 spec " \
+                "while preserving all v1 behavior. Do not start over unless it is strictly necessary. " \
                 "Verify your implementation passes all tests by running: bash test-v2.sh"
     v2_prompt += " #{LANGUAGES[lang][:extra_prompt]}" if LANGUAGES[lang][:extra_prompt]
 
     if dry_run
-      puts "  [DRY RUN] Would run Claude with prompt for v2 #{lang}"
+      puts "  [DRY RUN] Would run Codex with prompt for v2 #{lang}"
       record[:v2_time] = 0
     else
       v2_log = File.join(LOGS_DIR, "minigit-#{dir_name}-#{trial}-v2.json")
-      v2_result = run_claude(v2_prompt, dir: v2_dir, log_path: v2_log)
+      v2_result = run_codex(v2_prompt, dir: v2_dir, log_path: v2_log)
       record[:v2_time] = v2_result[:elapsed_seconds]
-      record[:v2_claude] = v2_result[:claude_data]
-      puts "  Claude finished in #{v2_result[:elapsed_seconds]}s (success=#{v2_result[:success]})"
+      record[:v2_agent] = v2_result[:codex_data]
+      puts "  Codex finished in #{v2_result[:elapsed_seconds]}s (success=#{v2_result[:success]})"
 
       puts '  Running v2 tests...'
       test_result = run_tests('test-v2.sh', dir: v2_dir)
@@ -354,7 +432,9 @@ puts '=' * 60
 # Save metadata alongside results
 meta = {
   date: Time.now.strftime('%Y-%m-%d %H:%M:%S'),
-  claude_version: claude_version,
+  agent_name: 'Codex Exec',
+  agent_version: codex_version,
+  service_tier: codex_service_tier,
   trials: selected_trials,
   versions: versions,
 }
