@@ -115,6 +115,7 @@ PALETTE = {
 }
 DEFAULT_COLOUR = "#999999"
 DEFAULT_AGENT_NAME = "Agent"
+DEFAULT_COMPARE_LABEL = "Baseline"
 
 
 # ── Load data ─────────────────────────────────────────────────────────────
@@ -166,6 +167,17 @@ def load_meta(path):
         return {}
     with open(path) as f:
         return json.load(f)
+
+
+def summarize_results(df):
+    return (
+        df.groupby("language", as_index=False)
+        .agg(
+            total_time=("total_time", "mean"),
+            total_cost=("total_cost", "mean"),
+            v2_loc=("v2_loc", "mean"),
+        )
+    )
 
 
 # ── Plotting helper ───────────────────────────────────────────────────────
@@ -312,6 +324,117 @@ def save(fig, outdir, name):
     print(f"  saved {path}")
 
 
+def ordered_languages(values):
+    langs = [l for l in LANG_ORDER if l in values]
+    for lang in sorted(values):
+        if lang not in langs:
+            langs.append(lang)
+    return langs
+
+
+def compare_table_rows(current_summary, baseline_summary):
+    current = current_summary.set_index("language")
+    baseline = baseline_summary.set_index("language")
+    common = ordered_languages(set(current.index) & set(baseline.index))
+
+    current_rank = {
+        lang: idx + 1
+        for idx, lang in enumerate(current.loc[common].sort_values("total_time").index)
+    }
+    baseline_rank = {
+        lang: idx + 1
+        for idx, lang in enumerate(baseline.loc[common].sort_values("total_time").index)
+    }
+
+    rows = []
+    for lang in common:
+        cur = current.loc[lang]
+        base = baseline.loc[lang]
+        rows.append({
+            "language": lang,
+            "current_time": cur["total_time"],
+            "baseline_time": base["total_time"],
+            "time_ratio": cur["total_time"] / base["total_time"],
+            "current_cost": cur["total_cost"],
+            "baseline_cost": base["total_cost"],
+            "cost_ratio": cur["total_cost"] / base["total_cost"],
+            "current_rank": current_rank[lang],
+            "baseline_rank": baseline_rank[lang],
+            "rank_delta": baseline_rank[lang] - current_rank[lang],
+        })
+    return pd.DataFrame(rows)
+
+
+def plot_rank_slope(ax, compare_df, *, current_label, baseline_label):
+    ax.set_title(f"Rank by Total Time: {baseline_label} vs {current_label}", pad=15)
+    ax.set_xlim(-0.1, 1.1)
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels([baseline_label, current_label])
+    ax.set_ylabel("Rank (lower is better)")
+    ax.invert_yaxis()
+
+    for _, row in compare_df.iterrows():
+        colour = PALETTE.get(row["language"], DEFAULT_COLOUR)
+        ax.plot(
+            [0, 1],
+            [row["baseline_rank"], row["current_rank"]],
+            color=colour,
+            linewidth=2,
+            alpha=0.85,
+            zorder=2,
+        )
+        ax.scatter([0, 1], [row["baseline_rank"], row["current_rank"]], color=colour, s=35, zorder=3)
+        ax.text(-0.03, row["baseline_rank"], LANG_LABELS.get(row["language"], row["language"]),
+                ha="right", va="center", fontsize=9, color=colour)
+        ax.text(1.03, row["current_rank"], LANG_LABELS.get(row["language"], row["language"]),
+                ha="left", va="center", fontsize=9, color=colour)
+
+
+def plot_ratio_bars(ax, compare_df, value_col, *, title, xlabel):
+    ordered = compare_df.sort_values(value_col)
+    y = np.arange(len(ordered))
+    colours = [PALETTE.get(lang, DEFAULT_COLOUR) for lang in ordered["language"]]
+    labels = [LANG_LABELS.get(lang, lang) for lang in ordered["language"]]
+    ax.barh(y, ordered[value_col], color=colours, alpha=0.8)
+    ax.axvline(1.0, color="#333333", linestyle="--", linewidth=1.2)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlabel(xlabel)
+    ax.set_title(title, pad=15)
+    for yi, value in zip(y, ordered[value_col]):
+        ax.text(value + 0.015, yi, f"{value:.2f}x", va="center", ha="left", fontsize=9)
+
+
+def write_comparison_report(path, compare_df, *, current_label, baseline_label, current_trials, baseline_trials):
+    lines = [
+        "# Benchmark Comparison",
+        "",
+        f"Shared configurations compared between **{baseline_label}** ({baseline_trials} trials) and **{current_label}** ({current_trials} trials).",
+        "",
+        "Time ratios are directly comparable. Cost ratios are less apples-to-apples because they reflect each agent's published pricing, and the Codex run used the `fast` service tier.",
+        "",
+        "| Language | "
+        f"{baseline_label} Time | {current_label} Time | Time Ratio | "
+        f"{baseline_label} Cost | {current_label} Cost | Cost Ratio | Rank Change |",
+        "|----------|"
+        + "----------------:|" * 6
+        + "------------:|",
+    ]
+
+    for _, row in compare_df.sort_values("current_time").iterrows():
+        rank_delta = int(row["rank_delta"])
+        delta_text = f"{rank_delta:+d}"
+        lines.append(
+            f"| {LANG_LABELS.get(row['language'], row['language'])} | "
+            f"{row['baseline_time']:.1f}s | {row['current_time']:.1f}s | {row['time_ratio']:.2f}x | "
+            f"${row['baseline_cost']:.2f} | ${row['current_cost']:.2f} | {row['cost_ratio']:.2f}x | {delta_text} |"
+        )
+
+    path.write_text("\n".join(lines) + "\n")
+    print(f"  wrote {path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -324,6 +447,22 @@ def main():
     parser.add_argument(
         "--meta", type=Path, default=Path("results/meta.json"),
         help="Path to meta.json (default: results/meta.json)",
+    )
+    parser.add_argument(
+        "--compare-json", type=Path,
+        help="Optional baseline results.json for comparison charts",
+    )
+    parser.add_argument(
+        "--compare-meta", type=Path,
+        help="Optional baseline meta.json for comparison charts",
+    )
+    parser.add_argument(
+        "--compare-label", default=DEFAULT_COMPARE_LABEL,
+        help="Display label for the baseline run",
+    )
+    parser.add_argument(
+        "--compare-report", type=Path,
+        help="Optional markdown output path for the comparison table",
     )
     args = parser.parse_args()
 
@@ -482,6 +621,54 @@ def main():
         save(fig, args.outdir, f"{suffix}_time_vs_loc")
 
     print("Done.")
+
+    if args.compare_json:
+        print("Generating comparison artifacts …")
+        compare_df = load_results(args.compare_json)
+        compare_meta = load_meta(args.compare_meta) if args.compare_meta else {}
+        baseline_label = (
+            compare_meta.get("agent_name")
+            or ("Claude Code" if compare_meta.get("claude_version") else None)
+            or args.compare_label
+        )
+        current_summary = summarize_results(df)
+        baseline_summary = summarize_results(compare_df)
+        comparison = compare_table_rows(current_summary, baseline_summary)
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        plot_rank_slope(ax, comparison, current_label=agent_name, baseline_label=baseline_label)
+        save(fig, args.outdir, "compare_rank")
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        plot_ratio_bars(
+            ax,
+            comparison,
+            "time_ratio",
+            title=f"Total Time Ratio: {agent_name} / {baseline_label}",
+            xlabel="Ratio (< 1.0 means current run is faster)",
+        )
+        save(fig, args.outdir, "compare_time_ratio")
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        plot_ratio_bars(
+            ax,
+            comparison,
+            "cost_ratio",
+            title=f"Total Cost Ratio: {agent_name} / {baseline_label}",
+            xlabel="Ratio (< 1.0 means current run is cheaper)",
+        )
+        ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("%.2fx"))
+        save(fig, args.outdir, "compare_cost_ratio")
+
+        if args.compare_report:
+            write_comparison_report(
+                args.compare_report,
+                comparison,
+                current_label=agent_name,
+                baseline_label=baseline_label,
+                current_trials=meta.get("trials", "?"),
+                baseline_trials=compare_meta.get("trials", "?"),
+            )
 
 
 if __name__ == "__main__":
